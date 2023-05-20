@@ -1,0 +1,198 @@
+#!/usr/bin/env python3
+# coding: euc_jp
+
+# ================================================================================
+# File Name                  : xxx
+#
+# Copyright(C) Canon Inc.
+# All rights reserved.
+# Confidential
+#
+# --------------------------------------------------------------------------------
+# Function                   : xxx
+# --------------------------------------------------------------------------------
+# Designer                   : Canon Inc.
+# --------------------------------------------------------------------------------
+# History      Date          Designer      Contents
+# 0.0.1.000    2023/04/15    Canon Inc.    New
+# ================================================================================
+
+import os
+import re
+import glob
+import subprocess
+import ftplib
+from datetime import datetime
+
+# xxx
+ESPRITSET_PATH = './'
+ESPRITSET_NAME = '*.espritset'
+ESPRITSET_KEY_NAME = 'NAME'
+ESPRITSET_KEY_TYPE = 'TYPE'
+ESPRITSET_KEY_IP = 'ADDRESS'
+ESPRITSET_KEY_SN = 'SN'
+
+# user/password
+EQUIP_USER = 'suomus'
+EQUIP_PASS = '1018'
+
+# xxx
+searchTargetList = [
+    {
+        'path': '/hestia/web/work',
+        'file': '*.sh',
+    },
+]
+
+
+"""
+@class   PriorConfirmation
+@details xxx
+"""
+class PriorConfirmation():
+
+    def __init__(self):
+        self.equipList = []
+
+    """
+    @fn      main()
+    @details xxx
+    @param   p1 xxx
+    @return  None xxx
+    """
+    def main(self):
+        self.getEquipInfo()
+
+        # LDB
+
+        #self.runConnectivityTest()
+
+        self.getFileInfoOnAnotherServer()
+
+
+
+
+
+    """
+    @fn      getEquipInfo()
+    @details MachineList内にあるespritsetを検索して、装置名、装置S/N、モデル、IPアドレスを取得する
+    @param   None
+    @return  None
+    """
+    def getEquipInfo(self):
+        print('==================== Get the espritset file ====================')
+
+        fileList = self.getFileList(ESPRITSET_PATH, ESPRITSET_NAME)
+        if len(fileList) == 0:
+            print('[ERROR] Espritset file not found')
+
+        for file in fileList:
+            equipName = ''
+            equipType = ''
+            equipIP = ''
+            equipSN = ''
+
+            f = open(file, 'r')
+            dataList = f.readlines()
+            for data in dataList:
+                if ESPRITSET_KEY_NAME in data: # ex) equip1
+                    equipName = re.findall('[a-zA-Z0-9_]+$', data)[0]
+                if ESPRITSET_KEY_TYPE in data: # ex) 63xxx
+                    equipType = re.findall('[a-zA-Z0-9_]+$', data)[0]
+                if ESPRITSET_KEY_IP in data: # ex) 192.168.1.10
+                    equipIP = re.findall('[0-9.]+$', data)[0]
+                if ESPRITSET_KEY_SN in data: # ex) 1234567
+                    equipSN = re.findall('[0-9]+$', data)[0]
+            f.close()
+
+            print('----- ' + file + ' -----')
+            print('Name: ' + equipName)
+            print('Type: ' + equipType)
+            print('IP  : ' + equipIP)
+            print('S/N : ' + equipSN)
+
+            equipInfo = {
+                ESPRITSET_KEY_NAME: equipName,
+                ESPRITSET_KEY_TYPE: equipType,
+                ESPRITSET_KEY_IP: equipIP,
+                ESPRITSET_KEY_SN: equipSN
+            }
+            self.equipList.append(equipInfo)
+
+    """
+    @fn      getFileList()
+    @details 対象パス内にある対象拡張子のファイルを検索してリスト形式で返す
+    @param   path      対象パス
+    @param   extension 対象拡張子
+    @return            ファイルリスト
+    """
+    def getFileList(self, path, extension = '*'):
+        fileList = ''
+        if os.path.exists(path):
+            fileList = glob.glob(os.path.join(path, extension))
+        return fileList
+
+    """
+    @fn      runConnectivityTest()
+    @details MDASに接続されているサーバーに対して疎通確認を実行する
+    @param   None
+    @return  None
+    """
+    def runConnectivityTest(self):
+        print('==================== Run Connectivity Test  ====================')
+
+        for equipInfo in self.equipList:
+            print('----- ' + 'Name: ' + equipInfo[ESPRITSET_KEY_NAME] + ' / ' + 'IP: ' + equipInfo[ESPRITSET_KEY_IP] + ' -----')
+            self.runPing(equipInfo[ESPRITSET_KEY_IP])
+
+        # LDB
+
+    """
+    @fn      runPing()
+    @details 指定されたIPアドレスに対してpingを実行する
+    @param   ip   IPアドレス
+    @return  None
+    """
+    def runPing(self, ip):
+        res = subprocess.run(['ping', ip, '-c', '4', '-w', '100'], stdout = subprocess.PIPE, stderr = subprocess.PIPE)
+        print(res.stdout.decode())
+        if res.returncode == 0:
+            print('Check -> OK!\n')
+        else:
+            print('Check -> NG!\n')
+
+
+
+
+    def getFileInfoOnAnotherServer(self):
+        for equipInfo in self.equipList:
+            print('----- ' + 'Name: ' + equipInfo[ESPRITSET_KEY_NAME] + ' / ' + 'IP: ' + equipInfo[ESPRITSET_KEY_IP] + ' -----')
+
+            ftp = ftplib.FTP(equipInfo[ESPRITSET_KEY_IP])
+            ftp.set_pasv('true')
+            ftp.login(EQUIP_USER, EQUIP_PASS)
+
+            for searchTarget in searchTargetList:
+                ftp.cwd(searchTarget['path'])
+                lines = []
+                ftp.dir(lines.append)
+                for line in lines:
+                    fileInfo = line.split()
+                    fileName = fileInfo[-1]
+
+                    modTime = datetime.strptime("{} {}".format(datetime.utcnow().year, " ".join(fileInfo[5:8])), "%Y %b %d %H:%M")
+                    print(modTime)
+
+
+
+            ftp.close()
+
+
+
+
+
+
+
+if __name__ == "__main__":
+    obj = PriorConfirmation()
+    obj.main()
