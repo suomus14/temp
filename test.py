@@ -2,7 +2,7 @@
 # coding: euc_jp
 
 # ================================================================================
-# File Name                  : xxx
+# File Name                  : init_check_tool.py
 #
 # Copyright(C) Canon Inc.
 # All rights reserved.
@@ -14,7 +14,7 @@
 # Designer                   : Canon Inc.
 # --------------------------------------------------------------------------------
 # History      Date          Designer      Contents
-# 0.0.1.000    2023/04/15    Canon Inc.    New
+# 0.0.1.000    2023/06/01    Canon Inc.    New
 # ================================================================================
 
 import os
@@ -23,49 +23,47 @@ import glob
 import json
 import subprocess
 from ftplib import FTP, all_errors
-from datetime import datetime
+from datetime import datetime, timedelta
+from telnetlib import Telnet
 
 # xxx
-ESPRITSET_PATH = './'
-ESPRITSET_NAME = '*.espritset'
-ESPRITSET_NAME_KEY = 'NAME'
-ESPRITSET_TYPE_KEY = 'TYPE'
-ESPRITSET_IP_KEY = 'ADDRESS'
-ESPRITSET_SN_KEY = 'SN'
+ESPRITSET_PATH     = '/console/mdas/MachineList'
+ESPRITSET_NAME     = '*.espritset'
+ESPRITSET_NAME_KEY = 'setenv TOOL_ID'
+ESPRITSET_TYPE_KEY = 'setenv ESPRIT_MACHINE_TYPE'
+ESPRITSET_EIP_KEY  = 'setenv EPC_IPADDR'
+ESPRITSET_LIP_KEY  = 'setenv LOGPC_IPADDR'
+ESPRITSET_SN_KEY   = 'setenv SERIAL_NUM'
 
 # xxx
-DATA_PUSH_JSON = 'data_push.json'
-LDB_FAB_KEY = 'fab_name'
-LDB_IP_KEY = 'ip_address'
+DATA_PUSH_PATH = '/console/mdas/etc'
+DATA_PUSH_FILE = 'data_push.json'
+LDB_FAB_KEY    = 'CustomerName'
+LDB_IP_KEY     = 'IPAddress'
 
 # Equip. user/password
-EQUIP_USER = 'suomus'
-EQUIP_PASS = '1018'
+EQUIP_USER = 'ifour'
+EQUIP_PASS = 'ifour22'
 EQUIP_PORT = 21
 
 # LDB user/password
-LDB_USER = 'suomus'
-LDB_PASS = '1018'
+LDB_USER = 'lpsuser'
+LDB_PASS = 'lpspass2'
+
+TELNET_PORT = 23
+TIME_OUT = 5
 
 # xxx
 searchTargetListEquip = [
     {
-        'path': '/hestia/web/work',
-        'file': '*.sh',
-    },
-    {
-        'path': '/hestia/web/a',
-        'file': '*.sh',
+        'path': '/home/suomus/Documents/check_tool',
+        'file': '*.espritset',
     },
 ]
 
 # xxx
-searchTargetListLdb = [
-    {
-        'path': '/hestia/web/work',
-        'file': '*.sh',
-    },
-]
+LDB_ORIGINAL_PATH = '/liplus/original'
+LDB_RECOVERY_PATH = '/liplus/recovery'
 
 """
 @class   PriorConfirmation
@@ -74,8 +72,33 @@ searchTargetListLdb = [
 class PriorConfirmation():
 
     def __init__(self):
-        self.equipList = []
-        self.ldbInfo = {}
+        self._ftp = FTP()
+
+        self._equipList = []
+        self._ldbInfo = {}
+
+        self._logFile = open('mdas_log.txt', 'w')
+
+    def __del__(self):
+        self._logFile.close()
+
+    def log_info(self, msg, flag = True):
+        now = datetime.now().strftime('%Y/%m/%d %H:%M:%S')
+        if flag:
+            print(now + ' [INFO ] ' + msg)
+        self._logFile.write(now + ' [INFO ] ' + msg + '\n')
+
+    def log_warn(self, msg, flag = True):
+        now = datetime.now().strftime('%Y/%m/%d %H:%M:%S')
+        if flag:
+            print(now + ' [WARN ] ' + msg)
+        self._logFile.write(now + ' [WARN ] ' + msg + '\n')
+
+    def log_error(self, msg, flag = True):
+        now = datetime.now().strftime('%Y/%m/%d %H:%M:%S')
+        if flag:
+            print(now + ' [ERROR] ' + msg)
+        self._logFile.write(now + ' [ERROR] ' + msg + '\n')
 
     """
     @fn      main()
@@ -91,13 +114,18 @@ class PriorConfirmation():
         self.getDataPushJson()
 
         # MDASに接続されているサーバーに対して疎通確認を実行する
-        #self.runConnectivityTest()
+        self.runConnectivityTest()
 
+        # FTP接続を行いファイルの存在確認と最新ファイルの時刻情報を取得する
+        # Equip.
+        # 装置が出力するtopomap/finfoなど
+        # ライセンスなど
+        # LiplusDB
+        # 転送先ディレクトリ
         self.getFileInfoOnAnotherServer()
 
-
-
-
+        # サーバーとの時刻差を検出する
+        self.compareSystemTime()
 
     """
     @fn      getEquipInfo()
@@ -106,47 +134,54 @@ class PriorConfirmation():
     @return  None
     """
     def getEquipInfo(self):
-        print('[INFO] ==================== Read the espritset files      ====================')
+        self.log_info('==================== Read the espritset files ===========================')
 
         fileList = self.getFileListInMdas(ESPRITSET_PATH, ESPRITSET_NAME)
-        print('[INFO] Number of espritset files = ' + str(len(fileList)))
+        self.log_info('Number of espritset files = ' + str(len(fileList)))
         if len(fileList) == 0:
-            print('[ERROR] Espritset file not found')
+            self.log_error('Espritset file not found')
 
         for file in fileList:
+            equipSN = ''
+            equipEIP = ''
+            equipLIP = ''
             equipName = ''
             equipType = ''
-            equipIP = ''
-            equipSN = ''
 
             f = open(file, 'r')
             dataList = f.readlines()
             for data in dataList:
-                if 0:
-                    pass
+                if ESPRITSET_SN_KEY in data: # ex) 1234567
+                    equipSN = re.findall('[0-9]+$', data)[0]
+                elif ESPRITSET_EIP_KEY in data: # ex) 192.168.1.10
+                    equipEIP = re.findall('[0-9.]+$', data)[0]
+                elif ESPRITSET_LIP_KEY in data: # ex) 192.168.1.10
+                    equipLIP = re.findall('[0-9.]+$', data)[0]
                 elif ESPRITSET_NAME_KEY in data: # ex) equip1
                     equipName = re.findall('[a-zA-Z0-9_]+$', data)[0]
                 elif ESPRITSET_TYPE_KEY in data: # ex) 63xxx
                     equipType = re.findall('[a-zA-Z0-9_]+$', data)[0]
-                elif ESPRITSET_IP_KEY in data: # ex) 192.168.1.10
-                    equipIP = re.findall('[0-9.]+$', data)[0]
-                elif ESPRITSET_SN_KEY in data: # ex) 1234567
-                    equipSN = re.findall('[0-9]+$', data)[0]
             f.close()
 
-            print('[INFO] ----- ' + os.path.basename(file) + ' -----')
-            print('[INFO] Name: ' + equipName)
-            print('[INFO] Type: ' + equipType)
-            print('[INFO] IP  : ' + equipIP)
-            print('[INFO] S/N : ' + equipSN)
+            self.log_info('-- ' + os.path.basename(file))
+            self.log_info('  Name: ' + equipName)
+            self.log_info('  Type: ' + equipType)
+            self.log_info('  EIP : ' + equipEIP)
+            self.log_info('  LIP : ' + equipLIP)
+            self.log_info('  S/N : ' + equipSN)
 
-            equipInfo = {
-                ESPRITSET_NAME_KEY: equipName,
-                ESPRITSET_TYPE_KEY: equipType,
-                ESPRITSET_IP_KEY: equipIP,
-                ESPRITSET_SN_KEY: equipSN,
-            }
-            self.equipList.append(equipInfo)
+            if (equipSN != '') and (equipEIP != '') and (equipLIP != '') and \
+                (equipName != '') and (equipType != ''):
+                equipInfo = {
+                    ESPRITSET_NAME_KEY: equipName,
+                    ESPRITSET_TYPE_KEY: equipType,
+                    ESPRITSET_EIP_KEY: equipEIP,
+                    ESPRITSET_LIP_KEY: equipLIP,
+                    ESPRITSET_SN_KEY: equipSN,
+                }
+                self._equipList.append(equipInfo)
+            else:
+                self.log_error('There was a problem with espritset file')
 
     """
     @fn      getDataPushJson()
@@ -155,17 +190,21 @@ class PriorConfirmation():
     @return  None
     """
     def getDataPushJson(self):
-        print('[INFO] ==================== Read the data_push.json       ====================')
+        self.log_info('==================== Read the data_push.json ============================')
 
-        jsonFile = open(DATA_PUSH_JSON, 'r')
-        jsonData = json.load(jsonFile)
-        self.ldbInfo = {
-            LDB_FAB_KEY: jsonData[LDB_FAB_KEY],
-            LDB_IP_KEY: jsonData[LDB_IP_KEY],
-        }
-        print('[INFO] ----- LiplusDB -----')
-        print('[INFO] FAB : ' + self.ldbInfo[LDB_FAB_KEY])
-        print('[INFO] IP  : ' + self.ldbInfo[LDB_IP_KEY])
+        path = os.path.join(DATA_PUSH_PATH, DATA_PUSH_FILE)
+        if os.path.exists(path):
+            jsonFile = open(path, 'r')
+            jsonData = json.load(jsonFile)
+            self._ldbInfo = {
+                LDB_FAB_KEY: jsonData[LDB_FAB_KEY],
+                LDB_IP_KEY: jsonData[LDB_IP_KEY],
+            }
+            self.log_info('-- data_push.json')
+            self.log_info('  FAB : ' + self._ldbInfo[LDB_FAB_KEY])
+            self.log_info('  IP  : ' + self._ldbInfo[LDB_IP_KEY])
+        else:
+            self.log_error('Path does not exist: ' + path)
 
     """
     @fn      getFileListInMdas()
@@ -178,6 +217,8 @@ class PriorConfirmation():
         fileList = ''
         if os.path.exists(path):
             fileList = glob.glob(os.path.join(path, extension))
+        else:
+            self.log_error('Path does not exist: ' + path)
         return fileList
 
     """
@@ -187,16 +228,14 @@ class PriorConfirmation():
     @return  None
     """
     def runConnectivityTest(self):
-        print('[INFO] ==================== Run Connectivity Test         ====================')
+        self.log_info('==================== Run Connectivity Test ==============================')
 
-        for equipInfo in self.equipList:
-            print('[INFO] ----- Name: ' + equipInfo[ESPRITSET_NAME_KEY] + ' / IP: ' + equipInfo[ESPRITSET_IP_KEY] + ' -----')
-            self.runPing(equipInfo[ESPRITSET_IP_KEY])
+        for equipInfo in self._equipList:
+            self.log_info('-- Name: ' + equipInfo[ESPRITSET_NAME_KEY] + ' / IP: ' + equipInfo[ESPRITSET_EIP_KEY])
+            self.runPing(equipInfo[ESPRITSET_EIP_KEY])
 
-        print('[INFO] ----- Name: LiplusDB / IP: ' + self.ldbInfo[LDB_IP_KEY] + ' -----')
-        self.runPing(self.ldbInfo[LDB_IP_KEY])
-
-        # LDB
+        self.log_info('-- Name: LiplusDB / IP: ' + self._ldbInfo[LDB_IP_KEY])
+        self.runPing(self._ldbInfo[LDB_IP_KEY])
 
     """
     @fn      runPing()
@@ -205,78 +244,205 @@ class PriorConfirmation():
     @return  None
     """
     def runPing(self, ip):
-        res = subprocess.run(['ping', ip, '-c', '4', '-w', '100'], stdout = subprocess.PIPE, stderr = subprocess.PIPE)
-        print(res.stdout.decode())
+        cmd = ['ping', ip, '-c', '4', '-w', '100']
+        self.log_info('  ' + ' '.join(cmd))
+        res = subprocess.run(cmd, stdout = subprocess.PIPE, stderr = subprocess.PIPE)
+        #self.log_info(res.stdout.decode(), False)
         if res.returncode == 0:
-            print('[INFO] Check -> OK!\n')
+            self.log_info('  Check -> OK!')
         else:
-            print('[INFO] Check -> NG!\n')
+            self.log_error('  Check -> NG!')
 
     """
     @fn      getFileInfoOnAnotherServer()
-    @details xxx
+    @details FTP接続を行いファイルの存在確認と最新ファイルの時刻情報を取得する
     @param   None
     @return  None
     """
     def getFileInfoOnAnotherServer(self):
-        print('[INFO] ==================== Check file existence in equip ====================')
+        self.log_info('==================== Check file existence in equip ======================')
 
-        for equipInfo in self.equipList:
-            print('[INFO] ----- ' + 'Name: ' + equipInfo[ESPRITSET_NAME_KEY] + ' / ' + 'IP: ' + equipInfo[ESPRITSET_IP_KEY] + ' -----')
+        for equipInfo in self._equipList:
+            self.log_info('-- ' + 'Name: ' + equipInfo[ESPRITSET_NAME_KEY] + ' / ' + 'IP: ' + equipInfo[ESPRITSET_EIP_KEY])
+            self.log_info('---- Equip')
 
             try:
-                ftp = FTP()
-                ftp.connect(host = equipInfo[ESPRITSET_IP_KEY], port = EQUIP_PORT, timeout = 5)
-                ftp.login(user = EQUIP_USER, passwd = EQUIP_PASS)
+                self._ftp = FTP()
+                self._ftp.connect(host = equipInfo[ESPRITSET_EIP_KEY], port = EQUIP_PORT, timeout = TIME_OUT)
+                self._ftp.login(user = EQUIP_USER, passwd = EQUIP_PASS)
             except all_errors as e:
-                print('[ERROR] FTP connection error: xxx')
+                self.log_error('FTP connection error: ' + str(e))
                 continue
 
-            for searchTarget in searchTargetListEquip:
-                print('[INFO] --- Search target path: ' + searchTarget['path'] + ' ---')
+            # Equip.
+            # 装置が出力するtopomap/finfoなど
+            # ライセンスなど
+            self.getFileInfoOnEquipServer()
 
+            self.log_info('---- LiplusDB')
+
+            # LiplusDB
+            # 転送先ディレクトリ
+            self.getFileInfoOnLDBServer(equipInfo)
+
+            self._ftp.close()
+
+    """
+    @fn      getFileInfoOnEquipServer()
+    @details FTP接続を行いファイルの存在確認と最新ファイルの時刻情報を取得する
+    @param   None
+    @return  None
+    """
+    def getFileInfoOnEquipServer(self):
+        for searchTarget in searchTargetListEquip:
+            self.log_info('------ Search target path: ' + searchTarget['path'] + '/' + searchTarget['file'])
+
+            try:
+                self._ftp.cwd(searchTarget['path'])
+            except all_errors as e:
+                self.log_error('FTP cwd (' + searchTarget['path'] + ') error: ' + str(e))
+                continue
+
+            latestFileName = ''
+            latestModTime = datetime(1900, 1, 1, 0, 0, 0)
+            lines = []
+            try:
+                # 対象パスでFTP DIRコマンドを実行する
+                self._ftp.dir(lines.append)
+            except all_errors as e:
+                self.log_error('FTP dir (' + searchTarget['path'] + ') error: ' + str(e))
+                continue
+
+            for line in lines:
+                # 下記の形式で取得できるため、分割する
+                # -rwxr-xr-x 1   1000 1000 1100 Apr 1   10:00 test.dat
+                # [0]        [1] [2]  [3]  [4]  [5] [6] [7]   [8]
+                fileInfo = line.split()
+                fileName = fileInfo[-1]
                 try:
-                    ftp.cwd(searchTarget['path'])
+                    modTime = latestModTime
+                    if re.match('\d{2}:\d{2}', fileInfo[7]):
+                        modTime = datetime.strptime('{} {}'.format(datetime.utcnow().year, ' '.join(fileInfo[5:8])), '%Y %b %d %H:%M')
+                    elif re.match('\d{4}', fileInfo[7]):
+                        year = fileInfo[7]
+                        fileInfo[7] = '00:00'
+                        modTime = datetime.strptime('{} {}'.format(year, ' '.join(fileInfo[5:8])), '%Y %b %d %H:%M')
+                    if modTime > latestModTime:
+                        latestFileName = fileName
+                        latestModTime = modTime
                 except all_errors as e:
-                    print('[ERROR] FTP cwd (' + searchTarget['path'] + ') error: xxx')
-                    continue
+                    self.log_warn('Failed to parse timestamp: ' + line)
+                    self.log_warn('Failed to parse timestamp: ' + str(e))
 
-                latestFileName = ''
-                latestModTime = datetime(1900, 1, 1, 0, 0, 0)
-                lines = []
-                try:
-                    # 対象パスでFTP DIRコマンドを実行する
-                    ftp.dir(lines.append)
-                except all_errors as e:
-                    print('[ERROR] FTP dir (' + searchTarget['path'] + ') error: xxx')
-                    continue
-                for line in lines:
-                    # 下記の形式で取得できるため、分割する
-                    # -rwxr-xr-x 1   1000 1000 1100 Apr 1   10:00 test.dat
-                    # [0]        [1] [2]  [3]  [4]  [5] [6] [7]   [8]
-                    fileInfo = line.split()
-                    fileName = fileInfo[-1]
-                    try:
-                        modTime = datetime.strptime("{} {}".format(datetime.utcnow().year, " ".join(fileInfo[5:8])), "%Y %b %d %H:%M")
-                        if modTime > latestModTime:
-                            latestFileName = fileName
-                            latestModTime = modTime
-                    except:
-                        print('[WARN] Failed to parse timestamp' + line)
+            if latestFileName != '':
+                self.log_info('  Latest file: file = ' + fileName + ' / time = ' + str(latestModTime))
+            else:
+                self.log_error('Could not find latest file')
 
-                if latestFileName != '':
-                    print('[INFO] Latest file: file = ' + fileName + ' / time = ' + str(latestModTime))
+    """
+    @fn      getFileInfoOnLDBServer()
+    @details FTP接続を行いファイルの存在確認と最新ファイルの時刻情報を取得する
+    @param   equipInfo 装置情報
+    @return  None
+    """
+    def getFileInfoOnLDBServer(self, equipInfo):
+        path = os.path.join(LDB_ORIGINAL_PATH, self._ldbInfo[LDB_FAB_KEY], equipInfo[ESPRITSET_SN_KEY])
+        self.log_info('------ Search target path: ' + path)
+        try:
+            self._ftp.cwd(path)
+            self.log_info('  Check -> OK!')
+        except all_errors as e:
+            self.log_error('FTP cwd (' + path + ') error: ' + str(e))
+            self.log_error('  Check -> NG!')
+
+    """
+    @fn      compareSystemTime()
+    @details xxx
+    @param   None
+    @return  None
+    """
+    def compareSystemTime(self):
+        self.log_info('==================== Get time difference ================================')
+
+        cmd = 'date \'+%Y/%m/%d %H:%M:%S\''
+
+        for equipInfo in self._equipList:
+            self.log_info('-- ' + 'Name: ' + equipInfo[ESPRITSET_NAME_KEY] + ' / ' + 'IP: ' + equipInfo[ESPRITSET_EIP_KEY])
+            self.log_info('---- Equip')
+
+            # 'date'コマンドを実行する
+            res = self.runTelnetCmd(equipInfo[ESPRITSET_EIP_KEY], EQUIP_USER, EQUIP_PASS, cmd)
+            if res:
+                self.checkTimeDifference(res.decode('utf-8'))
+
+        self.log_info('---- LiplusDB')
+
+        # 'date'コマンドを実行する
+        res = self.runTelnetCmd(self._ldbInfo[LDB_IP_KEY], LDB_USER, LDB_PASS, cmd)
+        if res:
+            self.checkTimeDifference(res.decode('utf-8'))
+
+    """
+    @fn      checkTimeDifference()
+    @details xxx
+    @param   None
+    @return  None
+    """
+    def checkTimeDifference(self, res):
+        # 接続先サーバーの時刻情報を取得する
+        match = re.search('\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2}', res)
+        if match:
+            destTime = datetime.strptime(match.group(), '%Y/%m/%d %H:%M:%S')
+            mdasTime = datetime.now()
+            self.log_info('  dest: ' + str(destTime))
+            self.log_info('  mdas: ' + str(mdasTime.strftime('%Y-%m-%d %H:%M:%S')))
+
+            diff = abs(destTime - mdasTime)
+            self.log_info('  diff: ' + str(diff))
+            if diff > timedelta(seconds = 120):
+                if destTime > mdasTime:
+                    self.log_info('  Check -> OK!')
                 else:
-                    print('[ERROR] Could not find latest file')
+                    self.log_error('  Check -> NG!')
 
-            ftp.close()
+    """
+    @fn      runTelnetCmd()
+    @details xxx
+    @param   None
+    @return  None
+    """
+    def runTelnetCmd(self, ip, user, passwd, cmd):
+        try:
+            # Telnetで接続を行う
+            tn = Telnet(ip, TELNET_PORT, TIME_OUT)
+            # ユーザー名の入力
+            tn.read_until(b'login: ')
+            tn.write(user.encode() + b'\n')
+            # パスワードの入力
+            tn.read_until(b'Password: ')
+            tn.write(passwd.encode() + b'\n')
+            # ログインの実行完了待ち
+            output = tn.read_until(b'$')
 
+        except:
+            self.log_error('Telnet connection error')
+            return
+            
+        try:
+            # コマンドを実行する
+            tn.write(cmd.encode() + b'\n')
+            # コマンドの実行完了待ち
+            output = tn.read_until(b'$')
+            # Telnetを切断する            
+            tn.write(b'exit\n')
 
+        except:
+            self.log_error('Command error via telnet')
+            return
 
+        return output
 
-
-
-
-if __name__ == "__main__":
+if __name__ == '__main__':
     obj = PriorConfirmation()
     obj.main()
+    del obj
