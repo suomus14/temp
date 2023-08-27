@@ -1,0 +1,627 @@
+Option Explicit
+
+'---------------------------------------------------------------------------------------------------
+'---------------------------------------------------------------------------------------------------
+'---------------------------------------------------------------------------------------------------
+
+Private Const MODEL_NUM_CELL = "B8"
+Private Const TITLE_CELL = "C8"
+Private Const DELETE_STR_CELL = "B3"
+
+'-------------------------------------------------
+' func        :
+' param [in ] :
+' param [out] :
+' return      :
+'-------------------------------------------------
+Sub web_scraping_Click()
+
+    '---------------------------------------
+    Dim homePage As String
+    Dim browser As New Selenium.WebDriver
+
+    ' 一度ホーム画面にアクセスして、年齢認証を解除する
+    homePage = "https://www.naturalhigh.co.jp"
+    browser.Start "Chrome" ' ブラウザを起動する
+    browser.Get homePage ' サイトを開く
+    browser.FindElementsByClass("age-gate-submit-yes")(1).Click ' 所定のボタンをクリックする
+
+
+    '---------------------------------------
+    Dim worksPage As String
+    Dim modelNumBegin As Long
+    Dim modelNumEnd As Long
+    Dim modelNum As Long
+    For modelNum = 800 To 840
+
+        ' 型番を作成する
+        Dim modelNumText As String
+        modelNumText = "NHDTB-" + Format(modelNum, "000")
+
+
+        '---------------------------------------
+        ' 既に読み込んでいるか、型番で検索する
+        Dim result As Range
+        Set result = Range(MODEL_NUM_CELL, Range(MODEL_NUM_CELL).End(xlDown)).find(modelNumText, LookAt:=xlWhole)
+        If Not (result Is Nothing) Then ' 既に読み込んでいる場合
+            ' タイトルが"no data"であるか確認する
+            If result.Offset(0, 1).Value <> "no data" Then ' タイトルが"no data"である場合
+                ' 処理をスキップする
+                GoTo CONTINUE
+            End If
+        End If
+
+
+        '---------------------------------------
+        ' Google Chromeで指定したURLのサイトを開く
+        worksPage = homePage + "/all/" + modelNumText
+        browser.Get worksPage
+
+        Dim title As String
+        Dim worksInfo As String
+        Dim temp As Variant
+        Dim myBy As New By
+
+
+        '---------------------------------------
+        ' 要素(single_cap)が存在するか確認する
+        If browser.IsElementPresent(myBy.ID("single_cap")) Then ' 要素(single_cap)が存在する
+            ' サイトから作品情報を取得する
+            worksInfo = browser.FindElementById("single_cap").Text()
+
+            ' 取得した作品情報からタイトルを抽出する
+            temp = Split(worksInfo, vbLf)
+            Dim idx As Long
+            For idx = 1 To UBound(temp)
+                If temp(idx) = "作品紹介" Then
+                    title = temp(idx - 1)
+                    Exit For
+                End If
+            Next idx
+        Else ' 要素(single_cap)が存在しない
+            ' 情報がないため、タイトルを"no data"とする
+            title = "no data"
+        End If
+
+
+        '---------------------------------------
+        ' 既に読み込んでいるか、型番で検索する
+        Dim writeA As Range
+        Dim writeB As Range
+        If Not (result Is Nothing) Then ' 既に読み込んでいる場合
+            ' 型番とタイトルをセルに書き込む(更新)
+            result.Value = modelNumText
+            result.Offset(0, 1).Value = title
+        Else
+            ' 型番とタイトルをセルに書き込む(新規)
+            Cells(Rows.Count, Range(MODEL_NUM_CELL).Offset(0, 0).Column).End(xlUp).Offset(1, 0).Value = modelNumText
+            Cells(Rows.Count, Range(MODEL_NUM_CELL).Offset(0, 1).Column).End(xlUp).Offset(1, 0).Value = title
+        End If
+
+CONTINUE:
+    Next modelNum
+
+End Sub
+
+'-------------------------------------------------
+' func        :
+' param [in ] :
+' param [out] :
+' return      :
+'-------------------------------------------------
+Sub format_Click()
+
+    '---------------------------------------
+    Dim row As Long
+    For row = Range(TITLE_CELL).row To Range(TITLE_CELL).End(xlDown).row
+
+
+        '---------------------------------------
+        ' タイトルをフォーマットする
+        Dim title As String
+        Dim titleCell As Range
+        title = Cells(row, Range(TITLE_CELL).Column).Value
+        Call replace_title(title)
+        Set titleCell = Cells(row, Range(TITLE_CELL).Column).Offset(0, 1)
+        titleCell.Value = title
+
+
+        '---------------------------------------
+        ' タイトルが200文字を超える場合は、セル背景色を強調する
+        If LenB(title) > 200 Then
+            titleCell.Interior.ColorIndex = 6
+            titleCell.Interior.Color = RGB(255, 255, 0)
+        Else
+            titleCell.Interior.ColorIndex = xlNone
+        End If
+    Next
+
+End Sub
+
+'-------------------------------------------------
+' func        :
+' param [in ] :
+' param [out] :
+' return      :
+'-------------------------------------------------
+Sub replace_title(ByRef title As String)
+
+    ' 修正が不要な場合はスキップする
+    If title = "" Then ' 空文字である
+        Exit Sub
+    End If
+    If title = "no data" Then ' タイトルが"no data"である
+        Exit Sub
+    End If
+
+
+    '---------------------------------------
+    Dim prevText As String
+    Dim nextText As String
+
+    '---------------------------------------
+    ' 文字の置換(全角→全角)
+
+    prevText = "●"
+    nextText = "○"
+    If InStr(title, prevText) > 0 Then
+        title = replace(title, prevText, nextText, 1, -1)
+    End If
+
+    '---------------------------------------
+    ' 文字の置換(全角→半角)
+
+    prevText = "　"
+    nextText = " "
+    If InStr(title, prevText) > 0 Then
+        title = replace(title, prevText, nextText, 1, -1)
+    End If
+
+    prevText = "．"
+    nextText = "."
+    If InStr(title, prevText) > 0 Then
+        title = replace(title, prevText, nextText, 1, -1)
+    End If
+
+    prevText = "（"
+    nextText = "("
+    If InStr(title, prevText) > 0 Then
+        title = replace(title, prevText, nextText, 1, -1)
+    End If
+
+    prevText = "）"
+    nextText = ")"
+    If InStr(title, prevText) > 0 Then
+        title = replace(title, prevText, nextText, 1, -1)
+    End If
+
+    prevText = Chr(&H8167) '“
+    nextText = """"
+    If InStr(title, prevText) > 0 Then
+        title = replace(title, prevText, nextText, 1, -1)
+    End If
+
+    prevText = Chr(&H8168) '”
+    nextText = """"
+    If InStr(title, prevText) > 0 Then
+        title = replace(title, prevText, nextText, 1, -1)
+    End If
+
+    '---------------------------------------
+    ' 文字の置換(半角→全角)
+
+    prevText = "!"
+    nextText = "！"
+    If InStr(title, prevText) > 0 Then
+        title = replace(title, prevText, nextText, 1, -1)
+    End If
+
+    prevText = "?"
+    nextText = "？"
+    If InStr(title, prevText) > 0 Then
+        title = replace(title, prevText, nextText, 1, -1)
+    End If
+
+    prevText = "/"
+    nextText = "／"
+    If InStr(title, prevText) > 0 Then
+        title = replace(title, prevText, nextText, 1, -1)
+    End If
+
+    '---------------------------------------
+    ' 文字の置換(数値)
+
+    prevText = "０"
+    nextText = "0"
+    If InStr(title, prevText) > 0 Then
+        title = replace(title, prevText, nextText, 1, -1)
+    End If
+
+    prevText = "１"
+    nextText = "1"
+    If InStr(title, prevText) > 0 Then
+        title = replace(title, prevText, nextText, 1, -1)
+    End If
+
+    prevText = "２"
+    nextText = "2"
+    If InStr(title, prevText) > 0 Then
+        title = replace(title, prevText, nextText, 1, -1)
+    End If
+
+    prevText = "３"
+    nextText = "3"
+    If InStr(title, prevText) > 0 Then
+        title = replace(title, prevText, nextText, 1, -1)
+    End If
+
+    prevText = "４"
+    nextText = "4"
+    If InStr(title, prevText) > 0 Then
+        title = replace(title, prevText, nextText, 1, -1)
+    End If
+
+    prevText = "５"
+    nextText = "5"
+    If InStr(title, prevText) > 0 Then
+        title = replace(title, prevText, nextText, 1, -1)
+    End If
+
+    prevText = "６"
+    nextText = "6"
+    If InStr(title, prevText) > 0 Then
+        title = replace(title, prevText, nextText, 1, -1)
+    End If
+
+    prevText = "７"
+    nextText = "7"
+    If InStr(title, prevText) > 0 Then
+        title = replace(title, prevText, nextText, 1, -1)
+    End If
+
+    prevText = "８"
+    nextText = "8"
+    If InStr(title, prevText) > 0 Then
+        title = replace(title, prevText, nextText, 1, -1)
+    End If
+
+    prevText = "９"
+    nextText = "9"
+    If InStr(title, prevText) > 0 Then
+        title = replace(title, prevText, nextText, 1, -1)
+    End If
+
+    '---------------------------------------
+    ' 文字の置換(アルファベット)
+
+    prevText = "ａ"
+    nextText = "a"
+    If InStr(title, prevText) > 0 Then
+        title = replace(title, prevText, nextText, 1, -1)
+    End If
+
+    prevText = "ｂ"
+    nextText = "b"
+    If InStr(title, prevText) > 0 Then
+        title = replace(title, prevText, nextText, 1, -1)
+    End If
+
+    prevText = "ｃ"
+    nextText = "c"
+    If InStr(title, prevText) > 0 Then
+        title = replace(title, prevText, nextText, 1, -1)
+    End If
+
+    prevText = "ｄ"
+    nextText = "d"
+    If InStr(title, prevText) > 0 Then
+        title = replace(title, prevText, nextText, 1, -1)
+    End If
+
+    prevText = "ｅ"
+    nextText = "e"
+    If InStr(title, prevText) > 0 Then
+        title = replace(title, prevText, nextText, 1, -1)
+    End If
+
+    prevText = "ｆ"
+    nextText = "f"
+    If InStr(title, prevText) > 0 Then
+        title = replace(title, prevText, nextText, 1, -1)
+    End If
+
+    prevText = "ｇ"
+    nextText = "g"
+    If InStr(title, prevText) > 0 Then
+        title = replace(title, prevText, nextText, 1, -1)
+    End If
+
+    prevText = "ｈ"
+    nextText = "h"
+    If InStr(title, prevText) > 0 Then
+        title = replace(title, prevText, nextText, 1, -1)
+    End If
+
+    prevText = "ｉ"
+    nextText = "i"
+    If InStr(title, prevText) > 0 Then
+        title = replace(title, prevText, nextText, 1, -1)
+    End If
+
+    prevText = "ｊ"
+    nextText = "j"
+    If InStr(title, prevText) > 0 Then
+        title = replace(title, prevText, nextText, 1, -1)
+    End If
+
+    prevText = "ｋ"
+    nextText = "k"
+    If InStr(title, prevText) > 0 Then
+        title = replace(title, prevText, nextText, 1, -1)
+    End If
+
+    prevText = "ｌ"
+    nextText = "l"
+    If InStr(title, prevText) > 0 Then
+        title = replace(title, prevText, nextText, 1, -1)
+    End If
+
+    prevText = "ｍ"
+    nextText = "m"
+    If InStr(title, prevText) > 0 Then
+        title = replace(title, prevText, nextText, 1, -1)
+    End If
+
+    prevText = "ｎ"
+    nextText = "n"
+    If InStr(title, prevText) > 0 Then
+        title = replace(title, prevText, nextText, 1, -1)
+    End If
+
+    prevText = "ｏ"
+    nextText = "o"
+    If InStr(title, prevText) > 0 Then
+        title = replace(title, prevText, nextText, 1, -1)
+    End If
+
+    prevText = "ｐ"
+    nextText = "p"
+    If InStr(title, prevText) > 0 Then
+        title = replace(title, prevText, nextText, 1, -1)
+    End If
+
+    prevText = "ｑ"
+    nextText = "q"
+    If InStr(title, prevText) > 0 Then
+        title = replace(title, prevText, nextText, 1, -1)
+    End If
+
+    prevText = "ｒ"
+    nextText = "r"
+    If InStr(title, prevText) > 0 Then
+        title = replace(title, prevText, nextText, 1, -1)
+    End If
+
+    prevText = "ｓ"
+    nextText = "s"
+    If InStr(title, prevText) > 0 Then
+        title = replace(title, prevText, nextText, 1, -1)
+    End If
+
+    prevText = "ｔ"
+    nextText = "t"
+    If InStr(title, prevText) > 0 Then
+        title = replace(title, prevText, nextText, 1, -1)
+    End If
+
+    prevText = "ｕ"
+    nextText = "u"
+    If InStr(title, prevText) > 0 Then
+        title = replace(title, prevText, nextText, 1, -1)
+    End If
+
+    prevText = "ｖ"
+    nextText = "v"
+    If InStr(title, prevText) > 0 Then
+        title = replace(title, prevText, nextText, 1, -1)
+    End If
+
+    prevText = "ｗ"
+    nextText = "w"
+    If InStr(title, prevText) > 0 Then
+        title = replace(title, prevText, nextText, 1, -1)
+    End If
+
+    prevText = "ｘ"
+    nextText = "x"
+    If InStr(title, prevText) > 0 Then
+        title = replace(title, prevText, nextText, 1, -1)
+    End If
+
+    prevText = "ｙ"
+    nextText = "y"
+    If InStr(title, prevText) > 0 Then
+        title = replace(title, prevText, nextText, 1, -1)
+    End If
+
+    prevText = "ｚ"
+    nextText = "z"
+    If InStr(title, prevText) > 0 Then
+        title = replace(title, prevText, nextText, 1, -1)
+    End If
+
+    prevText = "Ａ"
+    nextText = "A"
+    If InStr(title, prevText) > 0 Then
+        title = replace(title, prevText, nextText, 1, -1)
+    End If
+
+    prevText = "Ｂ"
+    nextText = "B"
+    If InStr(title, prevText) > 0 Then
+        title = replace(title, prevText, nextText, 1, -1)
+    End If
+
+    prevText = "Ｃ"
+    nextText = "C"
+    If InStr(title, prevText) > 0 Then
+        title = replace(title, prevText, nextText, 1, -1)
+    End If
+
+    prevText = "Ｄ"
+    nextText = "D"
+    If InStr(title, prevText) > 0 Then
+        title = replace(title, prevText, nextText, 1, -1)
+    End If
+
+    prevText = "Ｅ"
+    nextText = "E"
+    If InStr(title, prevText) > 0 Then
+        title = replace(title, prevText, nextText, 1, -1)
+    End If
+
+    prevText = "Ｆ"
+    nextText = "F"
+    If InStr(title, prevText) > 0 Then
+        title = replace(title, prevText, nextText, 1, -1)
+    End If
+
+    prevText = "Ｇ"
+    nextText = "G"
+    If InStr(title, prevText) > 0 Then
+        title = replace(title, prevText, nextText, 1, -1)
+    End If
+
+    prevText = "Ｈ"
+    nextText = "H"
+    If InStr(title, prevText) > 0 Then
+        title = replace(title, prevText, nextText, 1, -1)
+    End If
+
+    prevText = "Ｉ"
+    nextText = "I"
+    If InStr(title, prevText) > 0 Then
+        title = replace(title, prevText, nextText, 1, -1)
+    End If
+
+    prevText = "Ｊ"
+    nextText = "J"
+    If InStr(title, prevText) > 0 Then
+        title = replace(title, prevText, nextText, 1, -1)
+    End If
+
+    prevText = "Ｋ"
+    nextText = "K"
+    If InStr(title, prevText) > 0 Then
+        title = replace(title, prevText, nextText, 1, -1)
+    End If
+
+    prevText = "Ｌ"
+    nextText = "L"
+    If InStr(title, prevText) > 0 Then
+        title = replace(title, prevText, nextText, 1, -1)
+    End If
+
+    prevText = "Ｍ"
+    nextText = "M"
+    If InStr(title, prevText) > 0 Then
+        title = replace(title, prevText, nextText, 1, -1)
+    End If
+
+    prevText = "Ｎ"
+    nextText = "N"
+    If InStr(title, prevText) > 0 Then
+        title = replace(title, prevText, nextText, 1, -1)
+    End If
+
+    prevText = "Ｏ"
+    nextText = "O"
+    If InStr(title, prevText) > 0 Then
+        title = replace(title, prevText, nextText, 1, -1)
+    End If
+
+    prevText = "Ｐ"
+    nextText = "P"
+    If InStr(title, prevText) > 0 Then
+        title = replace(title, prevText, nextText, 1, -1)
+    End If
+
+    prevText = "Ｑ"
+    nextText = "Q"
+    If InStr(title, prevText) > 0 Then
+        title = replace(title, prevText, nextText, 1, -1)
+    End If
+
+    prevText = "Ｒ"
+    nextText = "R"
+    If InStr(title, prevText) > 0 Then
+        title = replace(title, prevText, nextText, 1, -1)
+    End If
+
+    prevText = "Ｓ"
+    nextText = "S"
+    If InStr(title, prevText) > 0 Then
+        title = replace(title, prevText, nextText, 1, -1)
+    End If
+
+    prevText = "Ｔ"
+    nextText = "T"
+    If InStr(title, prevText) > 0 Then
+        title = replace(title, prevText, nextText, 1, -1)
+    End If
+
+    prevText = "Ｕ"
+    nextText = "U"
+    If InStr(title, prevText) > 0 Then
+        title = replace(title, prevText, nextText, 1, -1)
+    End If
+
+    prevText = "Ｖ"
+    nextText = "V"
+    If InStr(title, prevText) > 0 Then
+        title = replace(title, prevText, nextText, 1, -1)
+    End If
+
+    prevText = "Ｗ"
+    nextText = "W"
+    If InStr(title, prevText) > 0 Then
+        title = replace(title, prevText, nextText, 1, -1)
+    End If
+
+    prevText = "Ｘ"
+    nextText = "X"
+    If InStr(title, prevText) > 0 Then
+        title = replace(title, prevText, nextText, 1, -1)
+    End If
+
+    prevText = "Ｙ"
+    nextText = "Y"
+    If InStr(title, prevText) > 0 Then
+        title = replace(title, prevText, nextText, 1, -1)
+    End If
+
+    prevText = "Ｚ"
+    nextText = "Z"
+    If InStr(title, prevText) > 0 Then
+        title = replace(title, prevText, nextText, 1, -1)
+    End If
+
+    '---------------------------------------
+    ' 文字の削除
+    Dim row As Long
+    For row = Worksheets("config").Range(DELETE_STR_CELL).row To Worksheets("config").Range(DELETE_STR_CELL).End(xlDown).row
+        Dim deleteStr As String
+        deleteStr = Worksheets("config").Cells(row, Range(DELETE_STR_CELL).Column).Value
+        If InStr(title, deleteStr) > 0 Then
+            title = replace(title, deleteStr, "", 1, -1)
+        End If
+    Next
+
+    '---------------------------------------
+    ' トリムする
+    title = replace(title, vbTab, "")
+    title = Trim(title)
+
+End Sub
+
+
